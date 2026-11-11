@@ -18,7 +18,9 @@ function cleanSupabaseUrl(raw: string): string {
  */
 export function getSupabase(): SupabaseClient {
   if (!client) {
-    client = createClient(cleanSupabaseUrl(requireEnv("SUPABASE_URL")), requireEnv("SUPABASE_SECRET_KEY"), {
+    // Keys never contain spaces or line breaks; strip any that slipped in while copying.
+    const key = requireEnv("SUPABASE_SECRET_KEY").replace(/\s+/g, "");
+    client = createClient(cleanSupabaseUrl(requireEnv("SUPABASE_URL")), key, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
   }

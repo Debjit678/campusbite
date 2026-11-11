@@ -24,8 +24,14 @@ export async function GET() {
 
   let databaseCheck = "skipped (Supabase settings missing)";
   if (settings.SUPABASE_URL && settings.SUPABASE_SECRET_KEY) {
-    const { error } = await getSupabase().from("menu_items").select("id").limit(1);
-    databaseCheck = error ? `failed: ${error.message}` : "ok (menu_items table found)";
+    try {
+      const { error } = await getSupabase().from("menu_items").select("id").limit(1);
+      databaseCheck = error ? `failed: ${error.message}` : "ok (menu_items table found)";
+    } catch (err) {
+      databaseCheck = `failed: ${err instanceof Error ? err.message : "error"}`;
+    }
+    // Never show any part of a key on this public page.
+    databaseCheck = databaseCheck.replace(/sb_(secret|publishable)_\S*/g, "sb_***");
   }
 
   return NextResponse.json({
