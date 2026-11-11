@@ -5,11 +5,12 @@ import type { AgentResult, AgentStep } from "@/lib/agent/types";
 
 type Message = { role: "user" | "model"; text: string; steps?: AgentStep[] };
 
-// YOUR JOB: change these sample prompts to match your problem statement.
+// Sample prompts for the CampusBite demo.
 const SAMPLE_PROMPTS = [
-  "Add a task to call the vendor tomorrow, then show all my tasks.",
-  "Which tasks are still open?",
-  "Mark the vendor call task as done.",
+  "What's veg under Rs 80 today?",
+  "I have Rs 150. Get me lunch with something sweet, pick up at 1:15.",
+  "Add a chicken biryani too.",
+  "Cancel my latest order.",
 ];
 
 export default function AgentChat({ onDataChanged }: { onDataChanged?: () => void }) {
@@ -54,7 +55,7 @@ export default function AgentChat({ onDataChanged }: { onDataChanged?: () => voi
   return (
     <div className="flex h-[70vh] flex-col rounded-xl border border-slate-200 bg-white">
       <div className="border-b border-slate-200 px-4 py-3">
-        <h2 className="font-semibold">Agent</h2>
+        <h2 className="font-semibold">CampusBite agent</h2>
         <p className="text-xs text-slate-500">Ask in plain English. You can see every tool the agent uses.</p>
       </div>
 

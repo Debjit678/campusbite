@@ -1,3 +1,19 @@
+# CampusBite: SRM canteen ordering agent
+
+Students order canteen food in plain English. An AI agent (Gemini function calling) checks the menu, stock, wallet and pickup slots, then places the order. The kitchen sees it at once on a live board.
+
+- Student screen `/`: agent chat, wallet and my orders, today's menu with live stock
+- Kitchen screen `/kitchen`: New orders, Preparing, Ready for pickup
+- Health check `/api/health`
+
+## How the agent works
+
+1. The API route sends the student's message and the list of 6 tools (getMenu, getWalletBalance, getPickupSlots, getMyOrders, placeOrder, cancelOrder) to Gemini, along with the system prompt.
+2. Gemini picks a tool and its arguments; our code checks the arguments with Zod and runs the tool against Supabase. placeOrder and cancelOrder call the database functions `place_order` and `cancel_order`, so balance, stock, slot and the 5-item limit are checked in one all-or-nothing transaction.
+3. The tool result goes back to Gemini, and the loop repeats until Gemini gives a final answer (at most 8 rounds).
+
+---
+
 # CampusBite Live Build: Starter
 
 This is the plain hackathon starter, prepared for the CampusBite live session.

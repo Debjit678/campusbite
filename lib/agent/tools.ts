@@ -2,82 +2,174 @@ import "server-only";
 import { z } from "zod";
 import { defineTool, type AgentTool } from "./defineTool";
 import { getSupabase } from "../supabase";
-import { isoDate } from "../schemas";
+import { CURRENT_STUDENT_ID, formatSlot, one } from "../campusbite";
 
 /*
- * EXAMPLE TOOLS for the starter "tasks" table (seed/00_starter_example.sql).
- * They show the pattern: 1 read tool + 2 write tools.
- *
- * YOUR JOB: replace these with tools for your problem statement.
- * Tips:
- *  - Write the description as "Use this when ..." so Gemini knows WHEN to call it.
- *  - Describe every field, including its format (for example YYYY-MM-DD).
- *  - Return small, clean objects. Gemini reads what you return.
- *  - Throw an Error with a clear message when something is wrong. The agent will explain it.
+ * CampusBite agent tools.
+ * Read tools (the agent's eyes): getMenu, getWalletBalance, getPickupSlots, getMyOrders
+ * Write tools (the agent's hands): placeOrder, cancelOrder
+ * Writes go through the database functions place_order / cancel_order, which check
+ * balance, stock, slot and the 5-item limit, and change everything together or nothing.
  */
 
-const listTasks = defineTool({
-  name: "listTasks",
+type OrderRow = {
+  id: number;
+  status: string;
+  total: number;
+  created_at: string;
+  pickup_slots: { slot_time: string } | { slot_time: string }[] | null;
+  order_items:
+    | {
+        quantity: number;
+        menu_items: { name: string } | { name: string }[] | null;
+      }[]
+    | null;
+};
+
+// ---------------------------------------------------------------- read tools
+
+const getMenu = defineTool({
+  name: "getMenu",
   description:
-    "Use this when the user wants to see their tasks. Can filter by status. Returns at most 20 tasks, newest first.",
+    "Use this when the student asks what food is available, wants suggestions, or before placing an order to get real item ids and prices. Returns only items in stock.",
   schema: z.object({
-    status: z
-      .enum(["open", "done", "all"])
+    category: z
+      .enum(["meal", "snack", "drink", "sweet"])
       .optional()
-      .describe("Which tasks to return. Default is all."),
+      .describe("Only this category: meal, snack, drink or sweet"),
+    veg_only: z.boolean().optional().describe("true to return only vegetarian items"),
+    max_price: z.number().int().positive().optional().describe("Highest price per item in rupees, for example 80"),
   }),
-  run: async ({ status }) => {
+  run: async ({ category, veg_only, max_price }) => {
     let query = getSupabase()
-      .from("tasks")
-      .select("id, title, due_date, status")
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (status && status !== "all") query = query.eq("status", status);
+      .from("menu_items")
+      .select("id, name, category, price, is_veg, stock, description")
+      .gt("stock", 0)
+      .order("category")
+      .order("price");
+    if (category) query = query.eq("category", category);
+    if (veg_only) query = query.eq("is_veg", true);
+    if (max_price) query = query.lte("price", max_price);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
-    return { count: data.length, tasks: data };
+    return { count: data.length, items: data };
   },
 });
 
-const createTask = defineTool({
-  name: "createTask",
-  description: "Use this when the user asks to add, create or remember a new task.",
-  writes: true,
-  schema: z.object({
-    title: z.string().trim().min(1).max(200).describe("Short title of the task"),
-    due_date: isoDate.optional().describe("Due date in YYYY-MM-DD format, if the user gave one"),
-  }),
-  run: async ({ title, due_date }) => {
+const getWalletBalance = defineTool({
+  name: "getWalletBalance",
+  description: "Use this when you need the student's wallet balance, for example before placing an order.",
+  schema: z.object({}),
+  run: async () => {
     const { data, error } = await getSupabase()
-      .from("tasks")
-      .insert({ title, due_date: due_date ?? null })
-      .select("id, title, due_date, status")
-      .single();
-    if (error) throw new Error(error.message);
-    return { created: data };
-  },
-});
-
-const completeTask = defineTool({
-  name: "completeTask",
-  description:
-    "Use this when the user says a task is finished. Needs the task id, so call listTasks first if you do not know it.",
-  writes: true,
-  schema: z.object({
-    id: z.number().int().positive().describe("The id of the task"),
-  }),
-  run: async ({ id }) => {
-    const { data, error } = await getSupabase()
-      .from("tasks")
-      .update({ status: "done" })
-      .eq("id", id)
-      .select("id, title, status")
+      .from("wallets")
+      .select("name, balance")
+      .eq("student_id", CURRENT_STUDENT_ID)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    if (!data) throw new Error(`No task found with id ${id}`);
-    return { updated: data };
+    if (!data) throw new Error("Wallet not found.");
+    return data;
   },
 });
 
-/** Every tool in this list is given to Gemini. Add your own tools here. */
-export const tools: AgentTool[] = [listTasks, createTask, completeTask];
+const getPickupSlots = defineTool({
+  name: "getPickupSlots",
+  description:
+    "Use this when you need today's pickup times and their slot ids, for example before placing an order. Returns only slots with free places.",
+  schema: z.object({}),
+  run: async () => {
+    const { data, error } = await getSupabase()
+      .from("pickup_slots")
+      .select("id, slot_time, capacity, booked")
+      .order("slot_time");
+    if (error) throw new Error(error.message);
+    const slots = data
+      .map((s) => ({ slot_id: s.id, time: formatSlot(s.slot_time), free: s.capacity - s.booked }))
+      .filter((s) => s.free > 0);
+    return { count: slots.length, slots };
+  },
+});
+
+const getMyOrders = defineTool({
+  name: "getMyOrders",
+  description:
+    "Use this when the student asks about their orders, order status, or wants to cancel an order and you need the order id.",
+  schema: z.object({}),
+  run: async () => {
+    const { data, error } = await getSupabase()
+      .from("orders")
+      .select("id, status, total, created_at, pickup_slots(slot_time), order_items(quantity, menu_items(name))")
+      .eq("student_id", CURRENT_STUDENT_ID)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (error) throw new Error(error.message);
+    const orders = (data as unknown as OrderRow[]).map((o) => ({
+      order_id: o.id,
+      status: o.status,
+      total: o.total,
+      pickup_time: formatSlot(one(o.pickup_slots)?.slot_time),
+      items: (o.order_items ?? []).map((i) => `${i.quantity} x ${one(i.menu_items)?.name ?? "item"}`),
+    }));
+    return { count: orders.length, orders };
+  },
+});
+
+// ---------------------------------------------------------------- write tools
+
+const placeOrder = defineTool({
+  name: "placeOrder",
+  description:
+    "Use this when the student wants to order food. Needs real menu item ids from getMenu and a real slot id from getPickupSlots. Pays from the wallet.",
+  writes: true,
+  schema: z.object({
+    items: z
+      .array(
+        z.object({
+          menu_item_id: z.number().int().positive().describe("The menu item id from getMenu"),
+          quantity: z.number().int().min(1).max(5).describe("How many, 1 to 5"),
+        })
+      )
+      .min(1)
+      .describe("The items to order"),
+    slot_id: z.number().int().positive().describe("The pickup slot id from getPickupSlots"),
+  }),
+  run: async ({ items, slot_id }) => {
+    // The database function checks balance, stock, slot and the 5-item limit.
+    const { data, error } = await getSupabase().rpc("place_order", {
+      p_student_id: CURRENT_STUDENT_ID,
+      p_slot_id: slot_id,
+      p_items: items,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+});
+
+const cancelOrder = defineTool({
+  name: "cancelOrder",
+  description:
+    "Use this only when the student clearly asks to cancel an order. Needs the order id from getMyOrders. Works only before the kitchen starts preparing.",
+  writes: true,
+  schema: z.object({
+    order_id: z.number().int().positive().describe("The order id from getMyOrders"),
+  }),
+  run: async ({ order_id }) => {
+    // The database function refunds the wallet, returns stock and frees the slot.
+    const { data, error } = await getSupabase().rpc("cancel_order", {
+      p_student_id: CURRENT_STUDENT_ID,
+      p_order_id: order_id,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+});
+
+/** Every tool in this list is given to Gemini. */
+export const tools: AgentTool[] = [
+  getMenu,
+  getWalletBalance,
+  getPickupSlots,
+  getMyOrders,
+  placeOrder,
+  cancelOrder,
+];

@@ -18,8 +18,8 @@ export const agentRequestSchema = z.object({
 
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
-// Example: schema for the starter "tasks" REST API
-export const createTaskSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  due_date: isoDate.optional(),
+// Kitchen status update: POST /api/kitchen
+export const kitchenUpdateSchema = z.object({
+  order_id: z.number().int().positive(),
+  status: z.enum(["preparing", "ready", "collected"]),
 });
